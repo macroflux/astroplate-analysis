@@ -24,7 +24,8 @@ night_2025-12-24/
 3. Place your `.jpg` image files in `frames/`
 4. Run the analysis:
    ```bash
-   python prep1/analyze1.py ./night_2025-12-24
+   cd /path/to/starplate-analysis/analysis_simple
+   python analyze.py ../data/night_2025-12-24
    ```
 
 ### For Testing
