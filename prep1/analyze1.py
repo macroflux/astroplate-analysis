@@ -18,9 +18,12 @@ def load_config(config_path: Path = None) -> dict:
     Returns:
         Configuration dictionary with all parameters.
     """
+    import copy
+    
     def deep_merge(base: dict, update: dict) -> dict:
         """Recursively merge update dict into base dict."""
-        result = base.copy()
+        # Deep copy base to avoid mutating the original
+        result = copy.deepcopy(base)
         for key, value in update.items():
             if key in result and isinstance(result[key], dict) and isinstance(value, dict):
                 # Recursively merge nested dictionaries
@@ -144,10 +147,7 @@ def main(night_dir: str, config_path: str = None):
         sys.exit(1)
     
     # Load configuration after validation
-    if config_path:
-        config = load_config(Path(config_path))
-    else:
-        config = load_config()
+    config = load_config(Path(config_path) if config_path else None)
     
     print(f"Found {len(frames)} frames to process.")
 

@@ -116,8 +116,8 @@ def validate_frames(night_dir: Path) -> bool:
     dimensions = set()
     
     for i, frame_path in enumerate(jpg_files[:sample_count]):
-        # Load image to check if it's readable and get dimensions
-        # Using IMREAD_UNCHANGED to preserve original image properties
+        # Load image with IMREAD_UNCHANGED to preserve original bit depth and channels
+        # This ensures we can detect any corruption without modifying the image data
         img = cv2.imread(str(frame_path), cv2.IMREAD_UNCHANGED)
         if img is None:
             print(f"❌ FAIL: Cannot read {frame_path.name}")
