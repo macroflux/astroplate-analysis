@@ -50,9 +50,15 @@ def load_config(config_path: Path = None) -> dict:
         try:
             with open(config_path, 'r') as f:
                 loaded_config = yaml.safe_load(f)
-                # Merge loaded config with defaults
+                # Perform deep merge: update nested dictionaries
                 if loaded_config:
-                    default_config.update(loaded_config)
+                    for section, values in loaded_config.items():
+                        if section in default_config and isinstance(values, dict):
+                            # Merge nested sections
+                            default_config[section].update(values)
+                        else:
+                            # Add new top-level sections
+                            default_config[section] = values
                 print(f"Loaded configuration from {config_path}")
         except Exception as e:
             print(f"Warning: Could not load config from {config_path}: {e}")

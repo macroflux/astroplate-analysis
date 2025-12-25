@@ -139,7 +139,7 @@ Output:
         color_parts = [int(c.strip()) for c in args.color.split(',')]
         if len(color_parts) != 3:
             raise ValueError
-        # Convert RGB to BGR for OpenCV
+        # Convert RGB to BGR for OpenCV (OpenCV uses BGR color order internally)
         line_color = (color_parts[2], color_parts[1], color_parts[0])
     except:
         print(f"Error: Invalid color format '{args.color}'. Use R,G,B format (e.g., '255,0,0')", 

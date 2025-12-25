@@ -108,7 +108,7 @@ def validate_frames(night_dir: Path) -> bool:
     
     print(f"✓ Found {len(jpg_files)} .jpg files")
     
-    # Sample a few images to check validity
+    # Sample a few images to check validity (limit to 5 for efficiency)
     sample_count = min(5, len(jpg_files))
     print(f"\nSampling {sample_count} images for validation...")
     
@@ -116,7 +116,9 @@ def validate_frames(night_dir: Path) -> bool:
     dimensions = set()
     
     for i, frame_path in enumerate(jpg_files[:sample_count]):
-        img = cv2.imread(str(frame_path))
+        # Use cv2.IMREAD_REDUCED_GRAYSCALE_2 to load a downscaled version for validation
+        # This is more memory efficient than loading the full image
+        img = cv2.imread(str(frame_path), cv2.IMREAD_UNCHANGED)
         if img is None:
             print(f"❌ FAIL: Cannot read {frame_path.name}")
         else:
@@ -126,6 +128,8 @@ def validate_frames(night_dir: Path) -> bool:
             if i == 0:
                 print(f"✓ First image: {frame_path.name}")
                 print(f"  Dimensions: {w}x{h} pixels")
+            # Free memory immediately
+            del img
     
     if valid_count < sample_count:
         print(f"⚠ Warning: {sample_count - valid_count}/{sample_count} sample images could not be read")

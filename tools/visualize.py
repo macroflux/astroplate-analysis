@@ -20,7 +20,6 @@ from pathlib import Path
 import sys
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
 
 
 def load_metrics(metrics_path: Path) -> dict:
@@ -64,7 +63,7 @@ def load_metrics(metrics_path: Path) -> dict:
     return data
 
 
-def create_plots(data: dict, output_dir: Path, show: bool = False):
+def create_plots(data: dict, output_dir: Path, show: bool = False, event_threshold: int = 2):
     """
     Create and save visualization plots.
     
@@ -72,7 +71,12 @@ def create_plots(data: dict, output_dir: Path, show: bool = False):
         data: Dictionary with metric data
         output_dir: Directory to save plots
         show: Whether to display plots interactively
+        event_threshold: Minimum streak count to highlight as event (default: 2)
     """
+    # Set matplotlib backend based on display mode
+    if not show:
+        matplotlib.use('Agg')  # Non-interactive backend for file output only
+    
     output_dir.mkdir(parents=True, exist_ok=True)
     
     frame_numbers = list(range(1, len(data['files']) + 1))
@@ -113,11 +117,11 @@ def create_plots(data: dict, output_dir: Path, show: bool = False):
     
     # Plot 3: Streak Count Per Frame
     plt.figure(figsize=(12, 5))
-    colors = ['red' if count >= 2 else 'blue' for count in data['streak_count']]
+    colors = ['red' if count >= event_threshold else 'blue' for count in data['streak_count']]
     plt.bar(frame_numbers, data['streak_count'], color=colors, alpha=0.7)
     plt.xlabel('Frame Number', fontsize=12)
     plt.ylabel('Streak Count', fontsize=12)
-    plt.title('Detected Streaks Per Frame (Red = Event)', fontsize=14, fontweight='bold')
+    plt.title(f'Detected Streaks Per Frame (Red = Event with {event_threshold}+ streaks)', fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3, axis='y')
     plt.tight_layout()
     
@@ -144,7 +148,7 @@ def create_plots(data: dict, output_dir: Path, show: bool = False):
     axes[1].grid(True, alpha=0.3)
     
     # Streaks
-    colors = ['red' if count >= 2 else 'blue' for count in data['streak_count']]
+    colors = ['red' if count >= event_threshold else 'blue' for count in data['streak_count']]
     axes[2].bar(frame_numbers, data['streak_count'], color=colors, alpha=0.7)
     axes[2].set_xlabel('Frame Number', fontsize=10)
     axes[2].set_ylabel('Streak Count', fontsize=10)
