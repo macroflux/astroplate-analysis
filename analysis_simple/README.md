@@ -116,7 +116,7 @@ python analysis_simple/analyze.py --help
 Your data should be organized as follows:
 
 ```
-nigh_2025-12-24/
+night_2025-12-24/
 ├── frames/
 │   ├── frame_001.jpg
 │   ├── frame_002.jpg
