@@ -73,9 +73,12 @@ def overlay_streaks(frame_path: Path, streaks: list, output_path: Path,
         x1, y1, x2, y2 = streak
         cv2.line(img, (x1, y1), (x2, y2), line_color, line_thickness)
     
-    # Add text annotation
+    # Add text annotation in top right
     text = f"Streaks: {len(streaks)}"
-    cv2.putText(img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+    text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
+    text_x = img.shape[1] - text_size[0] - 10  # 10px padding from right
+    text_y = 30
+    cv2.putText(img, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 
                 1.0, line_color, 2, cv2.LINE_AA)
     
     # Save annotated image
