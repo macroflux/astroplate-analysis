@@ -333,41 +333,45 @@ def main(night_dir: str, config_path: Optional[str] = None,
     # Filter out frames with outlier dimensions (e.g., thumbnails)
     print(f"Found {len(frames)} frames. Checking dimensions...")
     frame_dims = {}
-    for f in frames[:min(50, len(frames))]:  # Sample first 50 frames to determine common dimensions
+    frame_shapes = {}
+    # Read each frame once to determine its dimensions and count occurrences
+    for f in frames:
         img = cv2.imread(str(f))
         if img is not None:
             shape = (img.shape[0], img.shape[1])
+            frame_shapes[f] = shape
             frame_dims[shape] = frame_dims.get(shape, 0) + 1
-    
+
     if frame_dims:
         # Use the most common dimension
         common_dim = max(frame_dims.items(), key=lambda x: x[1])[0]
         print(f"Most common dimensions: {common_dim[1]}x{common_dim[0]} pixels")
-        
+
         # Filter frames to only include those with common dimensions
         filtered_frames = []
         outliers = []
         for f in frames:
-            img = cv2.imread(str(f))
-            if img is not None:
-                if (img.shape[0], img.shape[1]) == common_dim:
-                    filtered_frames.append(f)
-                else:
-                    outliers.append(f.name)
-        
+            shape = frame_shapes.get(f)
+            # If we couldn't read the frame (img was None), skip it silently as before
+            if shape is None:
+                continue
+            if shape == common_dim:
+                filtered_frames.append(f)
+            else:
+                outliers.append(f.name)
+
         frames = filtered_frames
-        
+
         if outliers:
             print(f"Filtered out {len(outliers)} frame(s) with different dimensions (likely thumbnails):")
             for o in outliers[:5]:  # Show first 5
                 print(f"  - {o}")
             if len(outliers) > 5:
                 print(f"  ... and {len(outliers) - 5} more")
-    
+
     if not frames:
         print(f"Error: No valid frames remaining after filtering.", file=sys.stderr)
         sys.exit(1)
-    
     print(f"Processing {len(frames)} frames with consistent dimensions.")
     
     # Load configuration after validation
