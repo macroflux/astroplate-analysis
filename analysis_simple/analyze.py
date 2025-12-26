@@ -387,11 +387,12 @@ def main(night_dir: str, config_path: Optional[str] = None,
             script_dir = Path(__file__).parent
             config = load_config(script_dir / "config.yaml")
     
-    print(f"Found {len(frames)} frames to process.")
+    # Frames are now validated and configuration is loaded; proceed to rebuild masks.
 
     # Remove old masks to force regeneration with current parameters
     mask_path = night / "sky_mask.png"
     persistent_path = night / "persistent_edges.png"
+    combined_path = night / "combined_mask.png"
     
     if mask_path.exists():
         mask_path.unlink()
@@ -399,6 +400,9 @@ def main(night_dir: str, config_path: Optional[str] = None,
     if persistent_path.exists():
         persistent_path.unlink()
         print(f"Removed old persistent_edges.png to regenerate with current configuration.")
+    if combined_path.exists():
+        combined_path.unlink()
+        print(f"Removed old combined_mask.png to regenerate with current configuration.")
 
     # Build masks (always regenerate to use current config)
     print(f"Building sky mask from multiple frames...")
@@ -414,8 +418,6 @@ def main(night_dir: str, config_path: Optional[str] = None,
 
     # Combined mask: keep sky where NOT persistent edges
     combined_mask = cv2.bitwise_and(mask, cv2.bitwise_not(persistent_edges))
-
-    combined_path = night / "combined_mask.png"
     cv2.imwrite(str(combined_path), combined_mask)
     print(f"Saved combined mask to {combined_path}")
     print(
