@@ -387,7 +387,7 @@ def main(night_dir: str, config_path: Optional[str] = None,
             script_dir = Path(__file__).parent
             config = load_config(script_dir / "config.yaml")
     
-    print(f"Found {len(frames)} frames to process.")
+    # Frames are now validated and configuration is loaded; proceed to rebuild masks.
 
     # Remove old masks to force regeneration with current parameters
     mask_path = night / "sky_mask.png"
