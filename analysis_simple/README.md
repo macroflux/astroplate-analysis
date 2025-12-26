@@ -214,6 +214,27 @@ Built by detecting edges across 80 sampled frames. Edges that appear in ≥20% o
 
 **Why this works:** Trees, buildings, and fixed structures create edges in the same locations frame after frame. Real sky events (meteors, satellites, planes) do not repeat in the same pixels.
 
+### combined_mask.png
+
+Grayscale image showing the final analysis region:
+- White pixels (255) = active analysis region where streaks are detected
+- Black pixels (0) = excluded regions (combined exclusions from sky_mask and persistent_edges)
+
+This mask is the result of combining `sky_mask.png` with `persistent_edges.png`:
+```
+combined_mask = sky_mask AND NOT persistent_edges
+```
+
+**Purpose:** This visualization shows you exactly what region of each frame is being analyzed for transient events. Review this file to verify that:
+- Important sky regions are included (white)
+- False positive sources are excluded (black)
+- The balance between sky coverage and noise reduction is appropriate
+
+**Using this for configuration tuning:**
+- If too much sky is excluded (too much black), increase `persistent_edges.keep_fraction` in your config
+- If false positives persist, decrease `persistent_edges.keep_fraction` or increase `persistent_edges.dilate_px`
+- Adjust settings and re-run analysis to see updated mask - masks regenerate each run
+
 ## Configuration
 
 The analysis pipeline can be customized using a YAML configuration file.
@@ -354,6 +375,12 @@ effective_analysis_region = sky_mask AND NOT persistent_edges
 After running analysis, you can open the generated mask files to verify:
 - `sky_mask.png` - Should show the sky region in white
 - `persistent_edges.png` - Should highlight treelines, buildings, fixed structures in white
+- `combined_mask.png` - Shows the final analysis region (white = analyzed, black = excluded)
+
+**Review `combined_mask.png` to understand what's being analyzed:**
+- This is the actual mask used for streak detection
+- White regions are where transient events will be detected
+- Black regions are completely excluded from analysis
 
 If `persistent_edges.png` shows too much sky highlighted, adjust `persistent_edges.keep_fraction` to a higher value (0.25-0.30).
 
