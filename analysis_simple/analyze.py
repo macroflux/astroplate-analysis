@@ -3,7 +3,7 @@ import cv2
 import json
 import csv
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import numpy as np
 import argparse
 import yaml
@@ -50,6 +50,14 @@ def load_config(config_path: Optional[Path] = None) -> dict:
             "dilate_px": 8,
             "resize_width": 0  # 0 = no resize (keep full resolution)
         },
+        "persistent_edges": {
+            "sample_count": 80,
+            "canny_low": 40,
+            "canny_high": 120,
+            "hp_sigma": 2.0,
+            "keep_fraction": 0.20,  # edge must appear in >=20% of samples
+            "dilate_px": 6
+        },
         "analysis": {
             "gaussian_sigma": 5
         },
@@ -84,7 +92,7 @@ def load_config(config_path: Optional[Path] = None) -> dict:
     
     return default_config
 
-def build_sky_mask(frames: list[Path], config: dict) -> np.ndarray:
+def build_sky_mask(frames: List[Path], config: dict) -> np.ndarray:
     """
     Build a robust sky mask using multiple frames.
 
@@ -112,6 +120,8 @@ def build_sky_mask(frames: list[Path], config: dict) -> np.ndarray:
         sample = paths
 
     grays = []
+    target_shape = None
+    
     for p in sample:
         img = cv2.imread(str(p))
         if img is None:
@@ -120,10 +130,20 @@ def build_sky_mask(frames: list[Path], config: dict) -> np.ndarray:
             scale = resize_width / img.shape[1]
             img = cv2.resize(img, (resize_width, int(img.shape[0] * scale)))
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Establish target shape from first valid frame
+        if target_shape is None:
+            target_shape = gray.shape
+        
+        # Skip frames with different dimensions
+        if gray.shape != target_shape:
+            print(f"Warning: Frame {p.name} has different dimensions {gray.shape} vs expected {target_shape}, skipping from mask generation.")
+            continue
+            
         grays.append(gray)
 
     if len(grays) < 5:
-        raise ValueError("Not enough readable sample frames to build a mask.")
+        raise ValueError("Not enough readable sample frames with consistent dimensions to build a mask.")
 
     stack = np.stack(grays, axis=0)  # (N,H,W)
 
@@ -150,12 +170,82 @@ def build_sky_mask(frames: list[Path], config: dict) -> np.ndarray:
 
     return sky
 
+def build_persistent_edge_mask(frames: List[Path], sky_mask: np.ndarray, config: dict) -> np.ndarray:
+    """
+    Build a mask of edges that appear persistently across multiple frames.
+    
+    This identifies static structures (trees, buildings, wires) that create
+    repeated edges in the same locations, allowing us to exclude them from
+    streak detection since real sky events don't repeat in the same pixels.
+    
+    Args:
+        frames: List of frame paths to sample
+        sky_mask: Base sky mask to constrain edge detection
+        config: Configuration dictionary
+    
+    Returns:
+        Binary mask where white pixels indicate persistent edges to exclude
+    """
+    pcfg = config.get("persistent_edges", {})
+    sample_count = int(pcfg.get("sample_count", 80))
+    canny_low = int(pcfg.get("canny_low", 40))
+    canny_high = int(pcfg.get("canny_high", 120))
+    hp_sigma = float(pcfg.get("hp_sigma", 2.0))
+    keep_fraction = float(pcfg.get("keep_fraction", 0.20))  # edge must appear in >=20% samples
+    dilate_px = int(pcfg.get("dilate_px", 6))
+
+    paths = list(frames)
+    if len(paths) == 0:
+        raise ValueError("No frames provided for persistent edge mask.")
+
+    if len(paths) > sample_count:
+        idxs = np.linspace(0, len(paths) - 1, sample_count).astype(int)
+        sample = [paths[i] for i in idxs]
+    else:
+        sample = paths
+
+    edge_sum = np.zeros_like(sky_mask, dtype=np.uint16)
+    used = 0
+
+    for p in sample:
+        img = cv2.imread(str(p))
+        if img is None:
+            continue
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        if gray.shape != sky_mask.shape:
+            continue
+
+        g = cv2.bitwise_and(gray, gray, mask=sky_mask)
+
+        # high-pass reduces slow gradients (clouds/glow)
+        blur = cv2.GaussianBlur(g, (0, 0), sigmaX=hp_sigma)
+        hp = cv2.subtract(g, blur)
+
+        edges = cv2.Canny(hp, canny_low, canny_high)
+        edge_sum += (edges > 0).astype(np.uint16)
+        used += 1
+
+    if used < 5:
+        return np.zeros_like(sky_mask, dtype=np.uint8)
+
+    thresh = max(1, int(np.ceil(keep_fraction * used)))
+    persistent = (edge_sum >= thresh).astype(np.uint8) * 255
+
+    if dilate_px > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_px*2+1, dilate_px*2+1))
+        persistent = cv2.dilate(persistent, k, iterations=1)
+
+    # make sure we only persist inside the sky_mask region
+    persistent = cv2.bitwise_and(persistent, persistent, mask=sky_mask)
+
+    return persistent
+
 def star_contrast_score(gray: np.ndarray, mask: np.ndarray, config: dict) -> float:
     # high-pass: stars increase local contrast
     sigma = config["analysis"]["gaussian_sigma"]
     blur = cv2.GaussianBlur(gray, (0,0), sigmaX=sigma)
     hp = cv2.subtract(gray, blur)
-    vals = hp[mask > 0]
+    vals = hp[mask > 0]  # type: ignore
     return float(np.std(vals))
 
 def detect_streaks(gray: np.ndarray, mask: np.ndarray, config: dict):
@@ -240,23 +330,95 @@ def main(night_dir: str, config_path: Optional[str] = None,
         print("Make sure your image files are in JPEG format with .jpg extension.", file=sys.stderr)
         sys.exit(1)
     
+    # Filter out frames with outlier dimensions (e.g., thumbnails)
+    print(f"Found {len(frames)} frames. Checking dimensions...")
+    frame_dims = {}
+    for f in frames[:min(50, len(frames))]:  # Sample first 50 frames to determine common dimensions
+        img = cv2.imread(str(f))
+        if img is not None:
+            shape = (img.shape[0], img.shape[1])
+            frame_dims[shape] = frame_dims.get(shape, 0) + 1
+    
+    if frame_dims:
+        # Use the most common dimension
+        common_dim = max(frame_dims.items(), key=lambda x: x[1])[0]
+        print(f"Most common dimensions: {common_dim[1]}x{common_dim[0]} pixels")
+        
+        # Filter frames to only include those with common dimensions
+        filtered_frames = []
+        outliers = []
+        for f in frames:
+            img = cv2.imread(str(f))
+            if img is not None:
+                if (img.shape[0], img.shape[1]) == common_dim:
+                    filtered_frames.append(f)
+                else:
+                    outliers.append(f.name)
+        
+        frames = filtered_frames
+        
+        if outliers:
+            print(f"Filtered out {len(outliers)} frame(s) with different dimensions (likely thumbnails):")
+            for o in outliers[:5]:  # Show first 5
+                print(f"  - {o}")
+            if len(outliers) > 5:
+                print(f"  ... and {len(outliers) - 5} more")
+    
+    if not frames:
+        print(f"Error: No valid frames remaining after filtering.", file=sys.stderr)
+        sys.exit(1)
+    
+    print(f"Processing {len(frames)} frames with consistent dimensions.")
+    
     # Load configuration after validation
-    config = load_config(Path(config_path) if config_path else None)
+    # Priority: 1) explicit --config arg, 2) night_dir/config.yaml, 3) analyze.py dir/config.yaml
+    if config_path:
+        config = load_config(Path(config_path))
+    else:
+        night_config = night / "config.yaml"
+        if night_config.exists():
+            config = load_config(night_config)
+        else:
+            # Look in same directory as analyze.py
+            script_dir = Path(__file__).parent
+            config = load_config(script_dir / "config.yaml")
     
     print(f"Found {len(frames)} frames to process.")
 
-    # Build or load mask
+    # Remove old masks to force regeneration with current parameters
     mask_path = night / "sky_mask.png"
+    persistent_path = night / "persistent_edges.png"
+    
     if mask_path.exists():
-        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-        if mask is None:
-            raise ValueError(f"Could not load mask from {mask_path}")
-        print(f"Loaded existing sky mask from {mask_path}")
-    else:
-        print(f"Building sky mask from multiple frames...")
-        mask = build_sky_mask(frames, config)
-        cv2.imwrite(str(mask_path), mask)
-        print(f"Saved sky mask to {mask_path}")
+        mask_path.unlink()
+        print(f"Removed old sky_mask.png to regenerate with current configuration.")
+    if persistent_path.exists():
+        persistent_path.unlink()
+        print(f"Removed old persistent_edges.png to regenerate with current configuration.")
+
+    # Build masks (always regenerate to use current config)
+    print(f"Building sky mask from multiple frames...")
+    mask = build_sky_mask(frames, config)
+    cv2.imwrite(str(mask_path), mask)
+    print(f"Saved sky mask to {mask_path}")
+
+    print("Building persistent edge mask from sampled frames...")
+    print("(This identifies static structures like trees, buildings, wires to exclude from detection)")
+    persistent_edges = build_persistent_edge_mask(frames, mask, config)
+    cv2.imwrite(str(persistent_path), persistent_edges)
+    print(f"Saved persistent edge mask to {persistent_path}")
+
+    # Combined mask: keep sky where NOT persistent edges
+    combined_mask = cv2.bitwise_and(mask, cv2.bitwise_not(persistent_edges))
+
+    combined_path = night / "combined_mask.png"
+    cv2.imwrite(str(combined_path), combined_mask)
+    print(f"Saved combined mask to {combined_path}")
+    print(
+        f"mask px={np.count_nonzero(mask)} "
+        f"persistent px={np.count_nonzero(persistent_edges)} "
+        f"combined px={np.count_nonzero(combined_mask)}"
+    )
 
     metrics_rows = []
     events = []
@@ -278,13 +440,13 @@ def main(night_dir: str, config_path: Optional[str] = None,
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
         # Check if frame dimensions match the mask
-        if gray.shape != mask.shape:
-            print(f"Warning: Frame {f.name} has different dimensions {gray.shape} vs mask {mask.shape}, skipping.", file=sys.stderr)
+        if gray.shape != combined_mask.shape:
+            print(f"Warning: Frame {f.name} has different dimensions {gray.shape} vs mask {combined_mask.shape}, skipping.", file=sys.stderr)
             continue
 
-        mean = float(np.mean(gray[mask > 0]))
-        contrast = star_contrast_score(gray, mask, config)
-        streaks = detect_streaks(gray, mask, config)
+        mean = float(np.mean(gray[combined_mask > 0]))  # type: ignore
+        contrast = star_contrast_score(gray, combined_mask, config)
+        streaks = detect_streaks(gray, combined_mask, config)
 
         metrics_rows.append({
             "file": f.name,

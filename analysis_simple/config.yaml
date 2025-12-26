@@ -6,15 +6,29 @@ masking:
     left: 0
     right: 450
 
+  sample_count: 60
+  low_percentile: 20
+  obstruction_threshold: 35
+  dilate_px: 8
+  resize_width: 0
+
+persistent_edges:
+  sample_count: 80
+  canny_low: 40
+  canny_high: 120
+  hp_sigma: 2.0
+  keep_fraction: 0.20
+  dilate_px: 6
+
 analysis:
   gaussian_sigma: 5
-  
+
 streak_detection:
   canny_low: 40
   canny_high: 120
   hough_threshold: 60
   min_line_length: 40
   max_line_gap: 10
-  
+
 events:
   min_streaks: 2
