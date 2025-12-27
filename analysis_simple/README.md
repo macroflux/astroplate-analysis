@@ -662,10 +662,6 @@ windows:
 5. **Verify startrails**: Check for unusual patterns in accumulated trails
 6. **Extract frames**: Use window start/end indices to locate frames for detailed analysis
 
-### Machine Learning Integration
-
-See the "Machine Learning Integration" section below for how to use activity windows in ML workflows.
-
 ## Machine Learning Integration
 
 The structured outputs are designed for machine learning workflows, enabling automated dataset generation and training data preparation.
