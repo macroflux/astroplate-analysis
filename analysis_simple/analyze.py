@@ -9,6 +9,7 @@ import argparse
 import yaml
 import sys
 import importlib.util
+from itertools import chain
 
 # Import timelapse module for video generation
 try:
@@ -683,8 +684,7 @@ def main(night_dir: str, config_path: Optional[str] = None,
         # Ensure the annotated directory actually contains image frames before building timelapse
         has_annotated_frames = False
         if annotated_dir.exists():
-            # Use itertools chain to short-circuit on first match
-            from itertools import chain
+            # Use chain to short-circuit on first match across multiple patterns
             has_annotated_frames = any(chain(
                 annotated_dir.glob("*.png"),
                 annotated_dir.glob("*.jpg"),
