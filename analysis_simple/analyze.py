@@ -308,6 +308,222 @@ def star_contrast_score(gray: np.ndarray, mask: np.ndarray, config: dict) -> flo
     vals = hp[mask > 0]  # type: ignore
     return float(np.std(vals))
 
+# --- NEW METRICS FUNCTIONS ---
+
+def focus_score(gray: np.ndarray, mask: np.ndarray) -> float:
+    """
+    Focus proxy: variance of Laplacian in masked region.
+    Higher = sharper stars; lower = blur/cloud/defocus.
+    """
+    lap = cv2.Laplacian(gray, cv2.CV_64F)
+    vals = lap[mask > 0]
+    if vals.size == 0:
+        return 0.0
+    return float(vals.var())
+
+def safe_mean(gray: np.ndarray, mask: np.ndarray) -> float:
+    """Safe mean calculation with NaN handling."""
+    vals = gray[mask > 0]
+    if vals.size == 0:
+        return float("nan")
+    return float(np.mean(vals))
+
+def robust_zscore(x: np.ndarray, eps: float = 1e-9) -> np.ndarray:
+    """
+    Robust z-score using median/MAD (stable under outliers).
+    """
+    x = x.astype(np.float64)
+    med = np.nanmedian(x)
+    mad = np.nanmedian(np.abs(x - med))
+    scale = 1.4826 * mad + eps  # MAD->sigma approx
+    return (x - med) / scale
+
+def diff1(x: np.ndarray) -> np.ndarray:
+    """
+    First difference with same-length output (prepend first value).
+    """
+    x = x.astype(np.float64)
+    if x.size == 0:
+        return x
+    d = np.diff(x, prepend=x[0])
+    return d
+
+def detect_activity_windows(
+    score: np.ndarray,
+    threshold: float,
+    min_len: int = 6,
+    pad: int = 10,
+    merge_gap: int = 8,
+    max_windows: int = 10
+):
+    """
+    Convert a 1D score signal into merged/padded windows where score >= threshold.
+    Returns list of dict windows with start/end/peak.
+    """
+    n = len(score)
+    if n == 0:
+        return []
+
+    active = score >= threshold
+    idx = np.where(active)[0]
+    if idx.size == 0:
+        return []
+
+    # Find contiguous runs
+    runs = []
+    start = idx[0]
+    prev = idx[0]
+    for k in idx[1:]:
+        if k == prev + 1:
+            prev = k
+        else:
+            runs.append((start, prev))
+            start = k
+            prev = k
+    runs.append((start, prev))
+
+    # Filter by min_len and pad
+    padded = []
+    for s, e in runs:
+        if (e - s + 1) < min_len:
+            continue
+        ps = max(0, s - pad)
+        pe = min(n - 1, e + pad)
+        padded.append((ps, pe))
+
+    if not padded:
+        return []
+
+    # Merge nearby windows
+    merged = [padded[0]]
+    for s, e in padded[1:]:
+        ms, me = merged[-1]
+        if s <= me + merge_gap:
+            merged[-1] = (ms, max(me, e))
+        else:
+            merged.append((s, e))
+
+    # Convert to dicts with peaks
+    windows = []
+    for s, e in merged:
+        seg = score[s:e+1]
+        peak_rel = int(np.argmax(seg))
+        peak_idx = s + peak_rel
+        windows.append({
+            "start": int(s),
+            "end": int(e),
+            "peak_index": int(peak_idx),
+            "peak_value": float(score[peak_idx]),
+            "length": int(e - s + 1),
+        })
+
+    # Sort by peak desc and cap
+    windows.sort(key=lambda w: w["peak_value"], reverse=True)
+    windows = windows[:max_windows]
+
+    # Keep chronological order for reporting/output
+    windows.sort(key=lambda w: w["start"])
+    return windows
+
+def ensure_dir(p: Path) -> Path:
+    """Create directory if it doesn't exist."""
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+def load_gray_frame(path: Path, target_shape=None) -> Optional[np.ndarray]:
+    """Load frame as grayscale with optional shape validation."""
+    img = cv2.imread(str(path))
+    if img is None:
+        return None
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    if target_shape is not None and g.shape != target_shape:
+        return None
+    return g
+
+def build_keogram(frames: List[Path], mask: np.ndarray, out_png: Path, column_width: int = 3) -> bool:
+    """
+    Keogram: for each frame, take the vertical slice at center (avg over column_width)
+    and stack slices horizontally (time axis).
+    """
+    h, w = mask.shape
+    cx = w // 2
+    half = max(1, column_width // 2)
+
+    strips = []
+    for p in frames:
+        g = load_gray_frame(p, target_shape=(h, w))
+        if g is None:
+            continue
+        # apply mask
+        gm = cv2.bitwise_and(g, g, mask=mask)
+        x0 = max(0, cx - half)
+        x1 = min(w, cx + half + 1)
+        strip = gm[:, x0:x1]
+        # collapse slice to 1 column by averaging
+        col = np.mean(strip.astype(np.float32), axis=1).astype(np.uint8)  # (H,)
+        strips.append(col)
+
+    if len(strips) < 2:
+        return False
+
+    keo = np.stack(strips, axis=1)  # (H, T)
+    cv2.imwrite(str(out_png), keo)
+    return True
+
+def build_startrails(frames: List[Path], mask: np.ndarray, out_png: Path, gamma: float = 1.0) -> bool:
+    """
+    Startrails: per-pixel max over time (masked).
+    Optionally apply a simple gamma.
+    """
+    h, w = mask.shape
+    acc = np.zeros((h, w), dtype=np.uint8)
+
+    used = 0
+    for p in frames:
+        g = load_gray_frame(p, target_shape=(h, w))
+        if g is None:
+            continue
+        gm = cv2.bitwise_and(g, g, mask=mask)
+        acc = np.maximum(acc, gm)
+        used += 1
+
+    if used < 2:
+        return False
+
+    if gamma and abs(gamma - 1.0) > 1e-3:
+        f = acc.astype(np.float32) / 255.0
+        f = np.power(f, 1.0 / gamma)
+        acc = np.clip(f * 255.0, 0, 255).astype(np.uint8)
+
+    cv2.imwrite(str(out_png), acc)
+    return True
+
+def build_timelapse_from_list(frame_paths: List[Path], out_mp4: Path, fps: int = 30) -> bool:
+    """Build timelapse from a list of frame paths."""
+    if not frame_paths:
+        return False
+    first = cv2.imread(str(frame_paths[0]))
+    if first is None:
+        return False
+    h, w = first.shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    vw = cv2.VideoWriter(str(out_mp4), fourcc, fps, (w, h))
+    if not vw.isOpened():
+        return False
+
+    wrote = 0
+    for p in frame_paths:
+        img = cv2.imread(str(p))
+        if img is None:
+            continue
+        if img.shape[:2] != (h, w):
+            continue
+        vw.write(img)
+        wrote += 1
+
+    vw.release()
+    return wrote > 0
+
 def detect_streaks(gray: np.ndarray, mask: np.ndarray, config: dict):
     # super basic streak detection (starter):
     # edges -> Hough lines, return list of segments
@@ -527,20 +743,21 @@ def main(night_dir: str, config_path: Optional[str] = None,
     
     # Frames are now validated and configuration is loaded; proceed to rebuild masks.
 
-    # Remove old masks to force regeneration with current parameters
-    mask_path = night / "sky_mask.png"
-    persistent_path = night / "persistent_edges.png"
-    combined_path = night / "combined_mask.png"
+    # Create masks directory and remove old masks to force regeneration with current parameters
+    masks_dir = ensure_dir(night / "masks")
+    mask_path = masks_dir / "sky_mask.png"
+    persistent_path = masks_dir / "persistent_edges.png"
+    combined_path = masks_dir / "combined_mask.png"
     
     if mask_path.exists():
         mask_path.unlink()
-        print(f"Removed old sky_mask.png to regenerate with current configuration.")
+        print(f"Removed old masks/sky_mask.png to regenerate with current configuration.")
     if persistent_path.exists():
         persistent_path.unlink()
-        print(f"Removed old persistent_edges.png to regenerate with current configuration.")
+        print(f"Removed old masks/persistent_edges.png to regenerate with current configuration.")
     if combined_path.exists():
         combined_path.unlink()
-        print(f"Removed old combined_mask.png to regenerate with current configuration.")
+        print(f"Removed old masks/combined_mask.png to regenerate with current configuration.")
 
     # Build masks (always regenerate to use current config)
     print(f"Building sky mask from multiple frames...")
@@ -588,14 +805,17 @@ def main(night_dir: str, config_path: Optional[str] = None,
             print(f"Warning: Frame {f.name} has different dimensions {gray.shape} vs mask {combined_mask.shape}, skipping.", file=sys.stderr)
             continue
 
-        mean = float(np.mean(gray[combined_mask > 0]))  # type: ignore
+        # UPDATED: Use safe_mean and add focus_score
+        mean = safe_mean(gray, combined_mask)
         contrast = star_contrast_score(gray, combined_mask, config)
+        focus = focus_score(gray, combined_mask)
         streaks = detect_streaks(gray, combined_mask, config)
 
         metrics_rows.append({
             "file": f.name,
             "mean_brightness": mean,
             "star_contrast": contrast,
+            "focus_score": focus,
             "streak_count": len(streaks),
         })
 
@@ -612,20 +832,135 @@ def main(night_dir: str, config_path: Optional[str] = None,
         print("Error: No frames were successfully processed.", file=sys.stderr)
         sys.exit(1)
 
-    # Write outputs
-    out_csv = night / "metrics.csv"
+    # --- STEP 2: Compute interest scores ---
+    print("\nComputing activity interest scores...")
+    files = [r["file"] for r in metrics_rows]
+    mean_arr = np.array([r["mean_brightness"] for r in metrics_rows], dtype=np.float64)
+    contr_arr = np.array([r["star_contrast"] for r in metrics_rows], dtype=np.float64)
+    focus_arr = np.array([r["focus_score"] for r in metrics_rows], dtype=np.float64)
+    streak_arr = np.array([r["streak_count"] for r in metrics_rows], dtype=np.float64)
+
+    # Change signals (spikes are usually in deltas)
+    d_mean = diff1(mean_arr)
+    d_contr = diff1(contr_arr)
+    d_focus = diff1(focus_arr)
+
+    # Robust z-scores
+    z_streak = robust_zscore(streak_arr)
+    z_dmean  = robust_zscore(np.abs(d_mean))
+    z_dcontr = robust_zscore(np.abs(d_contr))
+    z_dfocus = robust_zscore(np.abs(d_focus))
+
+    # Weights (configurable)
+    wcfg = config.get("windows", {})
+    w_streak = float(wcfg.get("w_streak", 0.60))
+    w_mean   = float(wcfg.get("w_mean",   0.15))
+    w_contr  = float(wcfg.get("w_contrast",0.15))
+    w_focus  = float(wcfg.get("w_focus",  0.10))
+
+    interest = (w_streak * z_streak) + (w_mean * z_dmean) + (w_contr * z_dcontr) + (w_focus * z_dfocus)
+
+    # Attach to metrics rows (so it lands in CSV)
+    for i in range(len(metrics_rows)):
+        metrics_rows[i]["interest_score"] = float(interest[i])
+        metrics_rows[i]["z_streak"] = float(z_streak[i])
+
+    # --- STEP 3: Detect activity windows ---
+    threshold = float(wcfg.get("threshold", 3.5))
+    min_len = int(wcfg.get("min_len", 6))
+    pad = int(wcfg.get("pad", 10))
+    merge_gap = int(wcfg.get("merge_gap", 8))
+    max_windows = int(wcfg.get("max_windows", 10))
+
+    windows = detect_activity_windows(
+        interest,
+        threshold=threshold,
+        min_len=min_len,
+        pad=pad,
+        merge_gap=merge_gap,
+        max_windows=max_windows
+    )
+
+    # Write outputs to data subfolder
+    data_dir = ensure_dir(night / "data")
+    out_csv = data_dir / "metrics.csv"
     with out_csv.open("w", newline="") as fp:
         w = csv.DictWriter(fp, fieldnames=metrics_rows[0].keys())
         w.writeheader()
         w.writerows(metrics_rows)
 
-    out_events = night / "events.json"
+    out_events = data_dir / "events.json"
     out_events.write_text(json.dumps(events, indent=2))
 
+    # Save activity windows
+    out_windows = data_dir / "activity_windows.json"
+    out_windows.write_text(json.dumps(windows, indent=2))
+
     print(f"\nAnalysis complete!")
+    print(f"  Data directory: {data_dir}")
     print(f"  Metrics saved to: {out_csv}")
     print(f"  Events saved to: {out_events}")
+    print(f"  Activity windows saved to: {out_windows}")
     print(f"  Detected {len(events)} events with {min_streaks}+ streaks")
+
+    # Display detected windows
+    if windows:
+        print("\n" + "="*60)
+        print("Activity windows detected (interest_score):")
+        print("="*60)
+        for w in windows:
+            print(
+                f"  frames {w['start']}–{w['end']} "
+                f"(len={w['length']}) peak@{w['peak_index']}={w['peak_value']:.2f}"
+            )
+    else:
+        print("\nNo activity windows detected above threshold.")
+
+    # --- STEP 4: Generate per-window artifacts ---
+    if windows:
+        print("\n" + "="*60)
+        print("Generating per-window artifacts...")
+        print("="*60)
+        activity_root = ensure_dir(night / "activity")
+        fps = int(config.get("timelapse", {}).get("fps", 30))
+        column_width = int(config.get("keogram", {}).get("column_width", 3))
+        trails_gamma = float(config.get("startrails", {}).get("gamma", 1.0))
+
+        for wi, w in enumerate(windows):
+            s, e = w["start"], w["end"]
+            window_frames = frames[s:e+1]
+
+            win_dir = ensure_dir(activity_root / f"window_{wi:02d}_{s:04d}_{e:04d}")
+            print(f"\n  Window {wi}: frames {s}–{e} ({len(window_frames)} frames)")
+
+            # 1) subset timelapse (raw frames)
+            out_mp4 = win_dir / "timelapse_window.mp4"
+            ok_vid = build_timelapse_from_list(window_frames, out_mp4, fps=fps)
+            if ok_vid:
+                print(f"    ✓ timelapse: {out_mp4.name}")
+
+            # 2) keogram
+            keo_png = win_dir / "keogram.png"
+            ok_keo = build_keogram(window_frames, combined_mask, keo_png, column_width=column_width)
+            if ok_keo:
+                print(f"    ✓ keogram:   {keo_png.name}")
+
+            # 3) startrails
+            trails_png = win_dir / "startrails.png"
+            ok_trails = build_startrails(window_frames, combined_mask, trails_png, gamma=trails_gamma)
+            if ok_trails:
+                print(f"    ✓ trails:    {trails_png.name}")
+
+            # Optional: if you already generated annotated frames, build annotated window clip too
+            annotated_dir = night / "annotated"
+            if annotated_dir.exists():
+                annotated_paths = [annotated_dir / f.name for f in window_frames]
+                annotated_paths = [p for p in annotated_paths if p.exists()]
+                if annotated_paths:
+                    out_ann = win_dir / "timelapse_annotated_window.mp4"
+                    ok_ann = build_timelapse_from_list(annotated_paths, out_ann, fps=fps)
+                    if ok_ann:
+                        print(f"    ✓ annotated: {out_ann.name}")
     
     # Run post-analysis tools if requested
     tools_dir = Path(__file__).parent / "tools"
@@ -664,36 +999,47 @@ def main(night_dir: str, config_path: Optional[str] = None,
     elif overlay and len(events) == 0:
         print("\nNote: No events detected, skipping overlay generation.")
     
-    if timelapse:
-        print("\n" + "="*60)
-        print("Generating timelapse videos...")
-        print("="*60)
-        
-        # Get timelapse settings from config
-        timelapse_config = config.get("timelapse", {})
-        fps = int(timelapse_config.get("fps", 30))
-        quality = int(timelapse_config.get("quality", 8))
-        
-        # Generate raw frames timelapse
-        raw_mp4 = night / "timelapse_raw.mp4"
-        if build_timelapse_video(frames_dir, raw_mp4, fps=fps, quality=quality):
-            print(f"  Raw timelapse saved to: {raw_mp4}")
-        
-        # Generate annotated frames timelapse if overlay was created
-        annotated_dir = night / "annotated"
-        # Ensure the annotated directory actually contains image frames before building timelapse
-        has_annotated_frames = False
-        if annotated_dir.exists():
-            # Use chain to short-circuit on first match across multiple patterns
-            has_annotated_frames = any(chain(
-                annotated_dir.glob("*.png"),
-                annotated_dir.glob("*.jpg"),
-                annotated_dir.glob("*.jpeg")
-            ))
-        if overlay and len(events) > 0 and has_annotated_frames:
-            annotated_mp4 = night / "timelapse_annotated.mp4"
-            if build_timelapse_video(annotated_dir, annotated_mp4, fps=fps, quality=quality):
-                print(f"  Annotated timelapse saved to: {annotated_mp4}")
+    # ALWAYS generate timelapse at the end if annotated frames exist
+    # This runs regardless of --timelapse flag
+    print("\n" + "="*60)
+    print("Generating timelapse video...")
+    print("="*60)
+    
+    # Get timelapse settings from config
+    timelapse_config = config.get("timelapse", {})
+    fps = int(timelapse_config.get("fps", 30))
+    quality = int(timelapse_config.get("quality", 8))
+    
+    # Create timelapse directory
+    timelapse_dir = ensure_dir(night / "timelapse")
+    print(f"  Created timelapse directory: {timelapse_dir}")
+    
+    # Check for annotated frames
+    annotated_dir = night / "annotated"
+    has_annotated_frames = False
+    if annotated_dir.exists():
+        # Check for any image files
+        has_annotated_frames = any(chain(
+            annotated_dir.glob("*.png"),
+            annotated_dir.glob("*.jpg"),
+            annotated_dir.glob("*.jpeg")
+        ))
+    
+    if has_annotated_frames:
+        print(f"  Found annotated frames in: {annotated_dir}")
+        annotated_mp4 = timelapse_dir / "timelapse_annotated.mp4"
+        if build_timelapse_video(annotated_dir, annotated_mp4, fps=fps, quality=quality):
+            print(f"  ✓ Annotated timelapse saved to: {annotated_mp4}")
+        else:
+            print(f"  ✗ Failed to create annotated timelapse", file=sys.stderr)
+    else:
+        if not annotated_dir.exists():
+            print("  Note: Annotated directory doesn't exist. Run with --overlay to generate annotated timelapse.")
+        else:
+            print("  Note: No annotated frames found. Run with --overlay to generate annotated timelapse.")
+        print(f"       Command: python analyze.py {night_dir} --overlay")
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -707,11 +1053,12 @@ Examples:
   python analyze.py ./night_2025-12-24 --all-tools
   
 Output files:
-  - sky_mask.png: Mask excluding non-sky regions
-  - metrics.csv: Per-frame brightness, contrast, and streak statistics
-  - events.json: Detected transient events with streak coordinates
+  - masks/: sky_mask.png, persistent_edges.png, combined_mask.png
+  - data/: metrics.csv, events.json, activity_windows.json
+  - activity/window_XX_YYYY_ZZZZ/: Per-window artifacts (timelapse, keogram, startrails)
   - plots/ (with --visualize): Time-series plots of metrics
   - annotated/ (with --overlay): Frames with detected streaks drawn
+  - timelapse/: timelapse_annotated.mp4
 """
     )
     parser.add_argument(

@@ -9,10 +9,9 @@ Usage:
     python timelapse.py <frames_dir> [options]
     python timelapse.py <frames_dir> --output video.mp4 --fps 30 --quality 8
 """
-
-import argparse
-import sys
 from pathlib import Path
+import sys
+import argparse
 
 try:
     import cv2
@@ -59,9 +58,7 @@ def build_timelapse(
         print(f"  Pattern: {pattern}")
         print(f"  Frames: {len(frames)}")
         print(f"  FPS: {fps}")
-        print(f"  Quality: {quality}")
         print(f"  Output: {output_path}")
-        print()
     
     try:
         # Create output directory if needed
@@ -75,36 +72,41 @@ def build_timelapse(
         
         height, width = first_frame.shape[:2]
         
-        # Note: quality parameter is reserved for future CRF mapping
-        # Currently using codec defaults with VideoWriter
-        
         # Create VideoWriter with H.264 codec
-        fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 codec
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
         
         if not writer.isOpened():
-            print(f"Error: Could not create video writer", file=sys.stderr)
+            print(f"Error: Could not open video writer for {output_path}", file=sys.stderr)
             return False
         
         # Write frames
+        written = 0
         for i, frame_path in enumerate(frames, 1):
-            if verbose and (i % 50 == 0 or i == len(frames)):
-                progress = 100 * i // len(frames)
-                print(f"  Encoding: {i}/{len(frames)} ({progress}%)")
+            frame = cv2.imread(str(frame_path))
+            if frame is None:
+                if verbose:
+                    print(f"  Warning: Could not read frame {frame_path.name}, skipping", file=sys.stderr)
+                continue
             
-            img = cv2.imread(str(frame_path))
-            if img is not None:
-                writer.write(img)
-            else:
-                print(f"Warning: Skipping unreadable frame: {frame_path}", file=sys.stderr)
+            # Check dimensions match
+            if frame.shape[:2] != (height, width):
+                if verbose:
+                    print(f"  Warning: Frame {frame_path.name} has different dimensions, skipping", file=sys.stderr)
+                continue
+            
+            writer.write(frame)
+            written += 1
+            
+            if verbose and (i % 50 == 0 or i == len(frames)):
+                print(f"  Progress: {i}/{len(frames)} frames ({100*i//len(frames)}%)")
         
         writer.release()
         
         if verbose:
-            print()
-            print(f"✓ Timelapse saved: {output_path}")
-            
-        return True
+            print(f"  Successfully wrote {written} frames")
+        
+        return written > 0
         
     except Exception as e:
         print(f"Error creating timelapse: {e}", file=sys.stderr)
@@ -122,9 +124,6 @@ Examples:
 
   # Specify output file and settings
   python timelapse.py path/to/frames --output night.mp4 --fps 25
-
-  # High quality timelapse with custom pattern
-  python timelapse.py path/to/frames --pattern "*.png" --quality 5 --fps 60
 
   # Create from annotated images
   python timelapse.py data/night_2025-12-24/annotated --output annotated.mp4

@@ -186,7 +186,7 @@ Output files (saved to <night_dir>/plots/ by default):
     
     parser.add_argument(
         'night_dir',
-        help='Path to night directory containing metrics.csv'
+        help='Path to night directory containing data/metrics.csv'
     )
     parser.add_argument(
         '-o', '--output',
@@ -207,8 +207,8 @@ Output files (saved to <night_dir>/plots/ by default):
         print(f"Error: Directory '{args.night_dir}' does not exist.", file=sys.stderr)
         sys.exit(1)
     
-    # Load metrics
-    metrics_path = night_dir / 'metrics.csv'
+    # Load metrics from data subfolder
+    metrics_path = night_dir / 'data' / 'metrics.csv'
     print(f"Loading metrics from {metrics_path}...")
     data = load_metrics(metrics_path)
     print(f"Loaded {len(data['files'])} frames")

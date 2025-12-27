@@ -50,20 +50,22 @@ def validate_directory_structure(night_dir: Path) -> bool:
         print(f"✓ frames/ subdirectory exists")
     
     # Check for existing outputs (informational)
-    mask_path = night_dir / 'sky_mask.png'
-    metrics_path = night_dir / 'metrics.csv'
-    events_path = night_dir / 'events.json'
+    masks_dir = night_dir / 'masks'
+    mask_path = masks_dir / 'sky_mask.png'
+    data_dir = night_dir / 'data'
+    metrics_path = data_dir / 'metrics.csv'
+    events_path = data_dir / 'events.json'
     
     if mask_path.exists():
-        print(f"ℹ sky_mask.png already exists (will be reused)")
+        print(f"ℹ masks/sky_mask.png already exists (will be reused)")
     else:
-        print(f"ℹ sky_mask.png not found (will be generated)")
+        print(f"ℹ masks/sky_mask.png not found (will be generated)")
     
     if metrics_path.exists():
-        print(f"ℹ metrics.csv already exists (will be overwritten)")
+        print(f"ℹ data/metrics.csv already exists (will be overwritten)")
     
     if events_path.exists():
-        print(f"ℹ events.json already exists (will be overwritten)")
+        print(f"ℹ data/events.json already exists (will be overwritten)")
     
     return is_valid
 

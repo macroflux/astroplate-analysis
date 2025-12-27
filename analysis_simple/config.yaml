@@ -38,3 +38,23 @@ events:
 timelapse:
   fps: 30
   quality: 8  # 0-10, lower = higher quality
+
+# Activity window detection parameters
+windows:
+  threshold: 3.5       # Interest score threshold for activity detection
+  min_len: 6           # Minimum frames for a window
+  pad: 10              # Padding frames around detected activity
+  merge_gap: 8         # Merge windows closer than this many frames
+  max_windows: 10      # Maximum number of windows to report
+  w_streak: 0.60       # Weight for streak count in interest score
+  w_mean: 0.15         # Weight for brightness change
+  w_contrast: 0.15     # Weight for contrast change
+  w_focus: 0.10        # Weight for focus change
+
+# Keogram generation
+keogram:
+  column_width: 3      # Width of center column to sample for keogram
+
+# Startrails generation
+startrails:
+  gamma: 1.0           # Gamma correction for startrails (1.0 = none)

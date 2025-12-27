@@ -105,7 +105,7 @@ Output:
     
     parser.add_argument(
         'night_dir',
-        help='Path to night directory containing events.json and frames/'
+        help='Path to night directory containing data/events.json and frames/'
     )
     parser.add_argument(
         '-o', '--output',
@@ -150,8 +150,8 @@ Output:
               file=sys.stderr)
         sys.exit(1)
     
-    # Load events
-    events_path = night_dir / 'events.json'
+    # Load events from data subfolder
+    events_path = night_dir / 'data' / 'events.json'
     print(f"Loading events from {events_path}...")
     events = load_events(events_path)
     print(f"Found {len(events)} events to annotate")
