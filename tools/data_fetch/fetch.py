@@ -47,7 +47,9 @@ class ImageFetcher:
         self,
         config_path: str = "config.yaml",
         verbose: bool = False,
-        quiet: bool = False
+        quiet: bool = False,
+        base_url: Optional[str] = None,
+        interactive: bool = True
     ):
         """
         Initialize the ImageFetcher.
@@ -56,9 +58,17 @@ class ImageFetcher:
             config_path: Path to YAML configuration file
             verbose: Enable verbose logging
             quiet: Enable quiet mode (errors only)
+            base_url: Override base URL from config
+            interactive: Enable interactive prompts for base URL
         """
         self.config = self._load_config(config_path)
         self._setup_logging(verbose, quiet)
+        self.interactive = interactive
+        
+        # Override base URL if provided
+        if base_url:
+            self.config['base_url'] = base_url
+        
         self.stats = {
             'total_size': 0,
             'total_files': 0,
@@ -141,6 +151,44 @@ class ImageFetcher:
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         self.logger = logging.getLogger(__name__)
+    
+    def prompt_base_url(self) -> str:
+        """
+        Interactively prompt user for base URL.
+        
+        Returns:
+            Base URL entered by user or default
+        """
+        default_domain = self.config['base_url'].split('//')[1].split('/')[0]
+        default_url = self.config['base_url']
+        
+        print("\n" + "="*60)
+        print("Image Fetcher - Source Configuration")
+        print("="*60)
+        print(f"\nDefault: {default_url}")
+        print("\nExamples:")
+        print("  - http://allsky.local/images/")
+        print("  - https://www.astroactual.com/allsky/images/")
+        print("  - http://192.168.1.100/images/")
+        
+        user_input = input(f"\nEnter base URL [press Enter for default]: ").strip()
+        
+        if not user_input:
+            print(f"Using default: {default_url}")
+            return default_url
+        
+        # Ensure URL ends with /
+        if not user_input.endswith('/'):
+            user_input += '/'
+        
+        # Validate URL format
+        if not (user_input.startswith('http://') or user_input.startswith('https://')):
+            print(f"Warning: URL should start with http:// or https://")
+            print(f"Adding http:// prefix...")
+            user_input = 'http://' + user_input
+        
+        print(f"Using: {user_input}")
+        return user_input
     
     def validate_date_format(self, date_str: str) -> bool:
         """
@@ -297,6 +345,8 @@ class ImageFetcher:
         backoff = self.config['network']['initial_backoff']
         multiplier = self.config['network']['backoff_multiplier']
         
+        error = "Max retries exceeded"
+        
         for attempt in range(max_retries):
             try:
                 self.logger.debug(f"Fetching directory listing from {url} (attempt {attempt + 1}/{max_retries})")
@@ -362,6 +412,8 @@ class ImageFetcher:
         backoff = self.config['network']['initial_backoff']
         multiplier = self.config['network']['backoff_multiplier']
         
+        error = "Max retries exceeded"
+        
         for attempt in range(max_retries):
             try:
                 self.logger.debug(f"Downloading {img_url} (attempt {attempt + 1}/{max_retries})")
@@ -425,6 +477,10 @@ class ImageFetcher:
         Returns:
             True if all downloads successful, False otherwise
         """
+        # Prompt for base URL if interactive mode and not in retry mode
+        if self.interactive and not retry_mode:
+            self.config['base_url'] = self.prompt_base_url()
+        
         # Validate date
         try:
             formatted_date = self.format_date(date_str)
@@ -660,6 +716,15 @@ Examples:
         action='store_true',
         help='Force re-download existing files'
     )
+    parser.add_argument(
+        '--base-url', '-b',
+        help='Base URL for image downloads (e.g., http://allsky.local/images/)'
+    )
+    parser.add_argument(
+        '--no-interactive',
+        action='store_true',
+        help='Disable interactive prompts, use config/command-line values only'
+    )
     
     args = parser.parse_args()
     
@@ -667,7 +732,9 @@ Examples:
     fetcher = ImageFetcher(
         config_path=args.config,
         verbose=args.verbose,
-        quiet=args.quiet
+        quiet=args.quiet,
+        base_url=args.base_url,
+        interactive=not args.no_interactive
     )
     
     # Execute operation

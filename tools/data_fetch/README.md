@@ -8,6 +8,7 @@ This tool provides a reliable, configurable way to download astroplate images fr
 
 ## Features
 
+- **Interactive Source Selection**: Prompt for base URL to download from different servers
 - **Configurable**: All settings in `config.yaml` with environment variable support
 - **Robust Error Handling**: Exponential backoff, connection timeouts, network interruption handling
 - **Progress Tracking**: Real-time progress bars using tqdm
@@ -46,12 +47,52 @@ This installs:
 
 ### Basic Usage
 
-Download a single night's images:
+Download a single night's images (interactive mode):
 
 ```bash
 cd tools/data_fetch
 python fetch.py 20251224
 ```
+
+When run, the tool will prompt you for the base URL:
+
+```
+============================================================
+Image Fetcher - Source Configuration
+============================================================
+
+Default: http://allsky.local/images/
+
+Examples:
+  - http://allsky.local/images/
+  - https://www.astroactual.com/allsky/images/
+  - http://192.168.1.100/images/
+
+Enter base URL [press Enter for default]: 
+```
+
+You can:
+- Press **Enter** to use the default (allsky.local)
+- Enter a custom URL like `https://www.astroactual.com/allsky/images/`
+- The tool will automatically add trailing `/` and `http://` prefix if needed
+
+### Specify Base URL via Command Line
+
+Skip the interactive prompt by providing URL directly:
+
+```bash
+python fetch.py 20251224 --base-url https://www.astroactual.com/allsky/images/
+```
+
+### Non-Interactive Mode
+
+Disable all prompts (useful for scripts/automation):
+
+```bash
+python fetch.py 20251224 --no-interactive
+```
+
+This will use the URL from `config.yaml` or `--base-url` flag without prompting.
 
 ### Verbose Output
 
@@ -205,8 +246,12 @@ Import and use in your own scripts:
 ```python
 from fetch import ImageFetcher
 
-# Create fetcher instance
+# Create fetcher instance with custom base URL
 fetcher = ImageFetcher(
+    verbose=True,
+    base_url="https://www.astroactual.com/allsky/images/",
+    interactive=False  # Disable prompts
+)
     config_path="config.yaml",
     verbose=True
 )
@@ -226,31 +271,77 @@ fetcher.retry_failed("20251224")
 ```
 usage: fetch.py [-h] [--config CONFIG] [--verbose | --quiet] [--retry]
                 [--dry-run] [--end-date END_DATE] [--force]
+                [--base-url BASE_URL] [--no-interactive]
                 date
 
-Download astroplate images from allsky.local
+Download astroplate images from allsky cameras
 
 positional arguments:
-  date                 Start date in YYYYMMDD format (e.g., 20251224)
+  date                  Start date in YYYYMMDD format (e.g., 20251224)
 
 optional arguments:
-  -h, --help           show this help message and exit
-  --config CONFIG      Path to config file (default: config.yaml)
-  --verbose, -v        Verbose output
-  --quiet, -q          Quiet output (errors only)
-  --retry, -r          Retry previously failed downloads
-  --dry-run, -n        Preview downloads without downloading
-  --end-date END_DATE  End date for range download (YYYYMMDD)
-  --force, -f          Force re-download existing files
+  -h, --help            show this help message and exit
+  --config CONFIG       Path to config file (default: config.yaml)
+  --verbose, -v         Verbose output
+  --quiet, -q           Quiet output (errors only)
+  --retry, -r           Retry previously failed downloads
+  --dry-run, -n         Preview downloads without downloading
+  --end-date END_DATE   End date for range download (YYYYMMDD)
+  --force, -f           Force re-download existing files
+  --base-url BASE_URL, -b BASE_URL
+                        Base URL for image downloads
+  --no-interactive      Disable interactive prompts
 ```
+
+## Downloading from Different Sources
+
+The tool supports downloading from any server that provides directory listings of images.
+
+### Common Use Cases
+
+**Local allsky camera (default):**
+```bash
+python fetch.py 20251224
+# Press Enter at prompt to use default: http://allsky.local/images/
+```
+
+**Public allsky server:**
+```bash
+python fetch.py 20240510 --base-url https://www.astroactual.com/allsky/images/
+```
+
+**Custom IP address:**
+```bash
+python fetch.py 20251224 --base-url http://192.168.1.100/images/
+```
+
+**Different port:**
+```bash
+python fetch.py 20251224 --base-url http://allsky.local:8080/images/
+```
+
+### Server Requirements
+
+The source server must:
+1. Provide directory listings at `{base_url}{YYYYMMDD}/`
+2. List images as HTML links (parsed by BeautifulSoup)
+3. Allow direct download of images via HTTP/HTTPS
+
+### URL Format
+
+Base URLs should follow this pattern:
+- Must end with `/`
+- Date will be appended: `{base_url}{YYYYMMDD}/`
+- Example: `http://allsky.local/images/` → `http://allsky.local/images/20251224/`
 
 ## Troubleshooting
 
 ### Connection Refused / Timeout
 
-- Check that allsky.local is accessible: `ping allsky.local`
-- Verify the base URL in config.yaml
+- Check that the server is accessible: `ping allsky.local`
+- Verify the base URL is correct
 - Try increasing `network.timeout` in config.yaml
+- Check firewall settings
 
 ### No Images Found
 
