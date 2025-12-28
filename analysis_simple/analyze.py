@@ -995,55 +995,35 @@ def main(night_dir: str, config_path: Optional[str] = None,
     else:
         print("\nNo activity windows detected above threshold.")
 
-    # --- STEP 4: Generate per-window artifacts ---
-    if windows:
-        print("\n" + "="*60)
-        print("Generating per-window artifacts...")
-        print("="*60)
-        activity_root = ensure_dir(night / "activity")
-        fps = int(config.get("timelapse", {}).get("fps", 30))
-        column_width = int(config.get("keogram", {}).get("column_width", 3))
-        trails_gamma = float(config.get("startrails", {}).get("gamma", 1.0))
-
-        for wi, w in enumerate(windows):
-            s, e = w["start"], w["end"]
-            window_frames = frames[s:e+1]
-
-            win_dir = ensure_dir(activity_root / f"window_{wi:02d}_{s:04d}_{e:04d}")
-            print(f"\n  Window {wi}: frames {s}–{e} ({len(window_frames)} frames)")
-
-            # 1) subset timelapse (raw frames)
-            out_mp4 = win_dir / "timelapse_window.mp4"
-            ok_vid = build_timelapse_from_list(window_frames, out_mp4, fps=fps)
-            if ok_vid:
-                print(f"    ✓ timelapse: {out_mp4.name}")
-
-            # 2) keogram
-            keo_png = win_dir / "keogram.png"
-            ok_keo = build_keogram(window_frames, combined_mask, keo_png, column_width=column_width)
-            if ok_keo:
-                print(f"    ✓ keogram:   {keo_png.name}")
-
-            # 3) startrails
-            trails_png = win_dir / "startrails.png"
-            ok_trails = build_startrails(window_frames, combined_mask, trails_png, gamma=trails_gamma)
-            if ok_trails:
-                print(f"    ✓ trails:    {trails_png.name}")
-
-            # Optional: if you already generated annotated frames, build annotated window clip too
-            annotated_dir = night / "annotated"
-            if annotated_dir.exists():
-                annotated_paths = [annotated_dir / f.name for f in window_frames]
-                annotated_paths = [p for p in annotated_paths if p.exists()]
-                if annotated_paths:
-                    out_ann = win_dir / "timelapse_annotated_window.mp4"
-                    ok_ann = build_timelapse_from_list(annotated_paths, out_ann, fps=fps)
-                    if ok_ann:
-                        print(f"    ✓ annotated: {out_ann.name}")
-    
     # Run post-analysis tools if requested
     tools_dir = Path(__file__).parent / "tools"
-    
+
+    # ------------------------------------------------------------
+    # OVERLAY FIRST (so Step 4 can build annotated window clips)
+    # ------------------------------------------------------------
+    annotated_dir = night / "annotated"
+    if overlay and len(events) > 0:
+        overlay_script = tools_dir / "overlay_streaks.py"
+        if overlay_script.exists():
+            import subprocess
+            print("\n" + "="*60)
+            print("Creating annotated frames with detected streaks...")
+            print("="*60)
+            result = subprocess.run(
+                [sys.executable, str(overlay_script), str(night), "--output", str(annotated_dir)]
+            )
+            if result.returncode == 0:
+                print(f"  Annotated frames saved to: {annotated_dir}")
+            else:
+                print("  Warning: overlay tool returned non-zero exit code.", file=sys.stderr)
+        else:
+            print(f"Warning: overlay_streaks.py not found at {overlay_script}", file=sys.stderr)
+    elif overlay and len(events) == 0:
+        print("\nNote: No events detected, skipping overlay generation.")
+
+    # ------------------------------------------------------------
+    # VISUALIZE (optional)
+    # ------------------------------------------------------------
     if visualize:
         visualize_script = tools_dir / "visualize.py"
         if visualize_script.exists():
@@ -1057,68 +1037,120 @@ def main(night_dir: str, config_path: Optional[str] = None,
             )
             if result.returncode == 0:
                 print(f"  Plots saved to: {plots_dir}")
+            else:
+                print("  Warning: visualize tool returned non-zero exit code.", file=sys.stderr)
         else:
             print(f"Warning: visualize.py not found at {visualize_script}", file=sys.stderr)
-    
-    if overlay and len(events) > 0:
-        overlay_script = tools_dir / "overlay_streaks.py"
-        if overlay_script.exists():
-            import subprocess
-            print("\n" + "="*60)
-            print("Creating annotated frames with detected streaks...")
-            print("="*60)
-            annotated_dir = night / "annotated"
-            result = subprocess.run(
-                [sys.executable, str(overlay_script), str(night), "--output", str(annotated_dir)]
-            )
-            if result.returncode == 0:
-                print(f"  Annotated frames saved to: {annotated_dir}")
-        else:
-            print(f"Warning: overlay_streaks.py not found at {overlay_script}", file=sys.stderr)
-    elif overlay and len(events) == 0:
-        print("\nNote: No events detected, skipping overlay generation.")
-    
-    # ALWAYS generate timelapse at the end if annotated frames exist
-    # This runs regardless of --timelapse flag
-    print("\n" + "="*60)
-    print("Generating timelapse video...")
-    print("="*60)
-    
-    # Get timelapse settings from config
-    timelapse_config = config.get("timelapse", {})
-    fps = int(timelapse_config.get("fps", 30))
-    quality = int(timelapse_config.get("quality", 8))
-    
-    # Create timelapse directory
-    timelapse_dir = ensure_dir(night / "timelapse")
-    print(f"  Created timelapse directory: {timelapse_dir}")
-    
-    # Check for annotated frames
-    annotated_dir = night / "annotated"
-    has_annotated_frames = False
-    if annotated_dir.exists():
-        # Check for any image files
-        has_annotated_frames = any(chain(
-            annotated_dir.glob("*.png"),
-            annotated_dir.glob("*.jpg"),
-            annotated_dir.glob("*.jpeg")
-        ))
-    
-    if has_annotated_frames:
-        print(f"  Found annotated frames in: {annotated_dir}")
-        annotated_mp4 = timelapse_dir / "timelapse_annotated.mp4"
-        if build_timelapse_video(annotated_dir, annotated_mp4, fps=fps, quality=quality):
-            print(f"  ✓ Annotated timelapse saved to: {annotated_mp4}")
-        else:
-            print(f"  ✗ Failed to create annotated timelapse", file=sys.stderr)
-    else:
-        if not annotated_dir.exists():
-            print("  Note: Annotated directory doesn't exist. Run with --overlay to generate annotated timelapse.")
-        else:
-            print("  Note: No annotated frames found. Run with --overlay to generate annotated timelapse.")
-        print(f"       Command: python analyze.py {night_dir} --overlay")
 
+    # ------------------------------------------------------------
+    # --- STEP 4: Generate per-window artifacts ---
+    # (NOW runs after overlay, so annotated window clips can work)
+    # ------------------------------------------------------------
+    if windows:
+        print("\n" + "="*60)
+        print("Generating per-window artifacts...")
+        print("="*60)
 
+        activity_root = ensure_dir(night / "activity")
+
+        timelapse_cfg = config.get("timelapse", {})
+        fps = int(timelapse_cfg.get("fps", 30))
+
+        column_width = int(config.get("keogram", {}).get("column_width", 3))
+        trails_gamma = float(config.get("startrails", {}).get("gamma", 1.0))
+
+        # Determine if annotated frames exist (post-overlay)
+        has_annotated_frames = False
+        if annotated_dir.exists():
+            has_annotated_frames = any(chain(
+                annotated_dir.glob("*.png"),
+                annotated_dir.glob("*.jpg"),
+                annotated_dir.glob("*.jpeg")
+            ))
+
+        for wi, w in enumerate(windows):
+            s, e = w["start"], w["end"]
+            window_frames = frames[s:e+1]
+
+            win_dir = ensure_dir(activity_root / f"window_{wi:02d}_{s:04d}_{e:04d}")
+            print(f"\n  Window {wi}: frames {s}–{e} ({len(window_frames)} frames)")
+
+            # 1) subset timelapse (raw frames)
+            out_mp4 = win_dir / "timelapse_window.mp4"
+            ok_vid = build_timelapse_from_list(window_frames, out_mp4, fps=fps)
+            if ok_vid:
+                print(f"    ✓ timelapse: {out_mp4.name}")
+            else:
+                print(f"    ✗ timelapse failed: {out_mp4.name}", file=sys.stderr)
+
+            # 2) keogram
+            keo_png = win_dir / "keogram.png"
+            ok_keo = build_keogram(window_frames, combined_mask, keo_png, column_width=column_width)
+            if ok_keo:
+                print(f"    ✓ keogram:   {keo_png.name}")
+            else:
+                print(f"    ✗ keogram failed: {keo_png.name}", file=sys.stderr)
+
+            # 3) startrails
+            trails_png = win_dir / "startrails.png"
+            ok_trails = build_startrails(window_frames, combined_mask, trails_png, gamma=trails_gamma)
+            if ok_trails:
+                print(f"    ✓ trails:    {trails_png.name}")
+            else:
+                print(f"    ✗ trails failed: {trails_png.name}", file=sys.stderr)
+
+            # 4) annotated window clip (if annotated frames exist)
+            if has_annotated_frames:
+                annotated_paths = [annotated_dir / f.name for f in window_frames]
+                annotated_paths = [p for p in annotated_paths if p.exists()]
+                if annotated_paths:
+                    out_ann = win_dir / "timelapse_annotated_window.mp4"
+                    ok_ann = build_timelapse_from_list(annotated_paths, out_ann, fps=fps)
+                    if ok_ann:
+                        print(f"    ✓ annotated: {out_ann.name}")
+                    else:
+                        print(f"    ✗ annotated timelapse failed: {out_ann.name}", file=sys.stderr)
+
+    # ------------------------------------------------------------
+    # FULL-NIGHT TIMELAPSE (only when --timelapse enabled)
+    # ------------------------------------------------------------
+    if timelapse:
+        print("\n" + "="*60)
+        print("Generating full-night timelapse videos...")
+        print("="*60)
+
+        timelapse_cfg = config.get("timelapse", {})
+        fps = int(timelapse_cfg.get("fps", 30))
+        quality = int(timelapse_cfg.get("quality", 8))
+
+        timelapse_dir = ensure_dir(night / "timelapse")
+        print(f"  Timelapse output directory: {timelapse_dir}")
+
+        # 1) Raw frames timelapse (from frames/)
+        raw_mp4 = timelapse_dir / "timelapse_raw.mp4"
+        if build_timelapse_video(frames_dir, raw_mp4, fps=fps, quality=quality):
+            print(f"  ✓ Raw timelapse saved to: {raw_mp4}")
+        else:
+            print("  ✗ Failed to create raw timelapse", file=sys.stderr)
+
+        # 2) Annotated timelapse (if annotated frames exist)
+        has_annotated_frames = False
+        if annotated_dir.exists():
+            has_annotated_frames = any(chain(
+                annotated_dir.glob("*.png"),
+                annotated_dir.glob("*.jpg"),
+                annotated_dir.glob("*.jpeg")
+            ))
+
+        if has_annotated_frames:
+            annotated_mp4 = timelapse_dir / "timelapse_annotated.mp4"
+            if build_timelapse_video(annotated_dir, annotated_mp4, fps=fps, quality=quality):
+                print(f"  ✓ Annotated timelapse saved to: {annotated_mp4}")
+            else:
+                print("  ✗ Failed to create annotated timelapse", file=sys.stderr)
+        else:
+            print("  Note: No annotated frames found (run with --overlay to generate them).")
+            print(f"        Command: python analyze.py {night_dir} --overlay --timelapse")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
