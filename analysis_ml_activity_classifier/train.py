@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from common import (
     build_feature_matrix,
     train_val_split,
     sigmoid,
+    windows_from_probability,
 )
 
 
@@ -74,6 +76,18 @@ def main():
     ap.add_argument("--l2", type=float, default=1e-3)
     ap.add_argument("--out", default=None, help="Output directory (default: <night>/ml)")
     ap.add_argument("--topk", type=int, default=50, help="Top K frames to list by predicted probability")
+    
+    # Peak-seeded windowing parameters
+    ap.add_argument("--emit-windows", action="store_true", default=True, help="Emit ml_windows.json (default: True)")
+    ap.add_argument("--ema-alpha", type=float, default=0.20, help="EMA smoothing alpha (0.15-0.30)")
+    ap.add_argument("--min-peak", type=float, default=0.35, help="Minimum peak probability threshold")
+    ap.add_argument("--min-prominence", type=float, default=0.04, help="Minimum peak prominence")
+    ap.add_argument("--tail-threshold", type=float, default=0.22, help="Tail expansion threshold")
+    ap.add_argument("--min-len", type=int, default=5, help="Minimum window length")
+    ap.add_argument("--pad", type=int, default=8, help="Padding frames around windows")
+    ap.add_argument("--merge-gap", type=int, default=10, help="Merge gap for nearby windows")
+    ap.add_argument("--max-windows", type=int, default=10, help="Maximum windows to output")
+    
     args = ap.parse_args()
 
     night = Path(args.night_dir)
@@ -126,15 +140,49 @@ def main():
 
     # score all frames
     p_all = sigmoid(X @ w + b)
+    
+    # Apply peak-seeded windowing to detect ML-based activity windows
+    ml_windows: list[dict] = []
+    p_all_smooth: np.ndarray = p_all.copy()
+    
+    if args.emit_windows:
+        result = windows_from_probability(
+            p_all,
+            smooth="ema",
+            ema_alpha=args.ema_alpha,
+            min_peak=args.min_peak,
+            min_prominence=args.min_prominence,
+            min_peak_distance=6,
+            tail_threshold=args.tail_threshold,
+            max_expand=None,
+            min_len=args.min_len,
+            pad=args.pad,
+            merge_gap=args.merge_gap,
+            max_windows=args.max_windows,
+            score_mode="area"
+        )
+        ml_windows = result["windows"]  # type: ignore[assignment]
+        p_all_smooth = result["p_smooth"]  # type: ignore[assignment]
+        
+        # Add filename fields to windows for convenience
+        for w in ml_windows:
+            w["start_file"] = rows[w["start"]].get("file", "")
+            w["end_file"] = rows[w["end"]].get("file", "")
+            w["peak_file"] = rows[w["peak_index"]].get("file", "")
+        
+        # Save ML windows to data directory (alongside activity_windows.json)
+        ml_windows_path = night / "data" / "ml_windows.json"
+        ml_windows_path.parent.mkdir(parents=True, exist_ok=True)
+        ml_windows_path.write_text(json.dumps(ml_windows, indent=2))
+        print(f"ML Windows: {ml_windows_path.name} ({len(ml_windows)} windows detected)")
 
-    # emit predictions CSV (simple)
-    import csv
+    # emit predictions CSV with both raw and smoothed probabilities
     pred_csv = out_dir / "predictions.csv"
     with pred_csv.open("w", newline="") as fp:
         writer = csv.writer(fp)
-        writer.writerow(["index", "file", "y_window", "p_activity"])
+        writer.writerow(["index", "file", "y_window", "p_activity_raw", "p_activity_smooth"])
         for i, r in enumerate(rows):
-            writer.writerow([i, r.get("file", ""), int(y[i]), float(p_all[i])])
+            writer.writerow([i, r.get("file", ""), int(y[i]), float(p_all[i]), float(p_all_smooth[i])])
 
     # ranked list (topk)
     order = np.argsort(-p_all)
@@ -154,9 +202,16 @@ def main():
     print("ML Activity Classifier (logistic regression, pseudo-labels from windows)")
     print("=" * 60)
     print(f"Output: {out_dir}")
-    print(f"Predictions: {pred_csv.name}")
+    print(f"Predictions: {pred_csv.name} (includes raw + smoothed probabilities)")
     print(f"Report: report.json")
-    print(f"TopK: topk_frames.json\n")
+    print(f"TopK: topk_frames.json")
+    if args.emit_windows and ml_windows:
+        print(f"ML Windows: data/ml_windows.json ({len(ml_windows)} windows)")
+        print("\nDetected ML activity windows:")
+        for w in ml_windows:
+            print(f"  frames {w['start']}–{w['end']} (len={w['length']}) "
+                  f"peak@{w['peak_index']}={w['peak_value']:.3f} area={w['area']:.2f}")
+    print()
 
     print("Validation metrics @ 0.50 threshold:")
     for k, v in report["val"].items():
