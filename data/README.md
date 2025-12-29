@@ -20,8 +20,9 @@ data/
 │   ├── data/                # OUTPUT: Structured data files
 │   │   ├── metrics.csv      # Per-frame statistics with focus_score and interest_score
 │   │   ├── events.json      # Detected transient events
-│   │   └── activity_windows.json  # Detected activity periods (NEW)
-│   ├── activity/            # OUTPUT: Per-window artifacts (NEW)
+│   │   ├── activity_windows.json  # Interest-based activity periods
+│   │   └── ml_windows.json  # ML-based activity periods (optional)
+│   ├── activity/            # OUTPUT: Interest-based per-window artifacts
 │   │   ├── window_00_0045_0089/
 │   │   │   ├── timelapse_window.mp4
 │   │   │   ├── keogram.png
@@ -30,6 +31,17 @@ data/
 │   │       ├── timelapse_window.mp4
 │   │       ├── keogram.png
 │   │       └── startrails.png
+│   ├── activity_ml/         # OUTPUT: ML-based per-window artifacts (optional)
+│   │   └── window_00_0157_0178/
+│   │       ├── timelapse_window.mp4
+│   │       ├── timelapse_annotated_window.mp4
+│   │       ├── keogram.png
+│   │       └── startrails.png
+│   ├── ml/                  # OUTPUT: ML classifier predictions (optional)
+│   │   ├── predictions.csv  # Per-frame probabilities (raw + smoothed)
+│   │   ├── predictions_smoothed.csv
+│   │   ├── report.json      # Training metrics
+│   │   └── topk_frames.json # High-confidence frames
 │   ├── plots/               # OUTPUT: Visualization plots
 │   │   ├── brightness_over_time.png
 │   │   ├── contrast_over_time.png
@@ -37,7 +49,8 @@ data/
 │   ├── annotated/           # OUTPUT: Frames with detected streaks overlaid
 │   │   ├── frame_002.jpg
 │   │   └── ...
-│   └── timelapse/           # OUTPUT: Full-night timelapse videos (NEW)
+│   └── timelapse/           # OUTPUT: Full-night timelapse videos
+│       ├── timelapse.mp4
 │       └── timelapse_annotated.mp4
 └── night_YYYY-MM-DD/        # Additional observation nights
     └── ...
@@ -45,15 +58,28 @@ data/
 
 ### New in v2.0
 
+**Organized Folder Structure:**
 - **masks/** - Organized directory for analysis masks (sky_mask.png, persistent_edges.png, combined_mask.png)
 - **data/** - Structured data outputs optimized for ML workflows
   - `metrics.csv` - Now includes `focus_score`, `interest_score`, and `z_streak` columns
-  - `activity_windows.json` - Automatically detected high-interest time periods
-- **activity/** - Per-window artifacts for each detected activity period
+  - `activity_windows.json` - Interest-based automatically detected high-interest time periods
+  - `ml_windows.json` - ML-based activity windows (optional, from ML classifier)
+- **activity/** - Interest-based per-window artifacts for each detected activity period
   - Timelapse videos of just the activity window
   - Keograms showing motion over time
   - Startrail composites
+- **activity_ml/** - ML-based per-window artifacts (optional, from ML window detector)
+  - Same structure as activity/ but for ML-detected windows
+  - Includes both raw and annotated timelapses when available
+- **ml/** - ML classifier outputs (optional)
+  - Per-frame activity probabilities (raw and smoothed)
+  - Training reports and high-confidence frame lists
 - **timelapse/** - Organized location for full-night timelapse videos
+
+**Dual Window Detection:**
+The pipeline now supports two complementary methods:
+1. **Interest-based** (analysis_simple): Rule-based, fast, no training required
+2. **ML-based** (analysis_ml_activity_classifier + analysis_ml_windows): Data-driven, learns patterns, provides confidence scores
 
 ## Usage
 
@@ -78,9 +104,21 @@ This creates `data/night_YYYY-MM-DD/frames/` and downloads all images.
 
 Once you have images in place, run the analysis:
 
+**Basic analysis (interest-based windows):**
 ```bash
 cd analysis_simple/
-python analyze.py ../data/night_YYYY-MM-DD/
+python analyze.py ../data/night_YYYY-MM-DD/ --all-tools
+```
+
+**Optional: ML-based windows:**
+```bash
+# Train classifier and detect ML windows
+cd analysis_ml_activity_classifier/
+python train.py ../data/night_YYYY-MM-DD/
+
+# Generate ML window artifacts
+cd ../analysis_ml_windows/
+python infer_windows.py ../data/night_YYYY-MM-DD/ --artifacts
 ```
 
 ### Image Requirements

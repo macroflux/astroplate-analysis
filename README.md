@@ -9,18 +9,34 @@ This repository contains multiple analysis tools, each in its own self-contained
 ### Analysis Tools
 
 #### `analysis_simple/`
-Basic computer vision pipeline using OpenCV for streak detection in time-lapse astronomical images.
+Basic computer vision pipeline using OpenCV for streak detection and interest-based activity window detection.
 
-- **Purpose**: Detect satellite streaks, meteors, and transient events using edge detection and Hough transforms
+- **Purpose**: Detect satellite streaks, meteors, and transient events using edge detection, Hough transforms, and automated activity window detection
+- **Key Features**: Focus scoring, interest scoring, per-window artifacts (timelapses, keograms, startrails)
 - **Dependencies**: OpenCV, NumPy, Matplotlib, PyYAML
-- **Status**: Active development (v1)
+- **Status**: Active development (v2.0)
 
 See [`analysis_simple/README.md`](analysis_simple/README.md) for detailed usage and configuration.
 
-#### Future Analysis Tools (Planned)
-- `analysis_ml/` - Machine learning-based detection using neural networks
-- `analysis_sk/` - scikit-learn based statistical analysis
-- Additional experimental pipelines as they're developed
+#### `analysis_ml_activity_classifier/`
+Machine learning activity classifier using logistic regression with peak-seeded windowing for detecting activity periods from per-frame features.
+
+- **Purpose**: Train classifier on pseudo-labeled data and detect ML-based activity windows using peak-seeded windowing algorithm
+- **Key Features**: Peak detection, EMA smoothing, adaptive window boundaries, filename fields in outputs
+- **Dependencies**: NumPy, scikit-learn patterns (custom implementation)
+- **Status**: Active (v1.0)
+
+See [`analysis_ml_activity_classifier/README.md`](analysis_ml_activity_classifier/README.md) for detailed usage.
+
+#### `analysis_ml_windows/`
+ML window detection tool that applies peak-seeded windowing to classifier probabilities for detecting activity periods.
+
+- **Purpose**: Detect activity windows from ML predictions with configurable smoothing and thresholding
+- **Key Features**: EMA/MA smoothing, per-window artifacts, configurable detection parameters
+- **Dependencies**: NumPy, PyYAML, OpenCV (for artifacts)
+- **Status**: Active (v1.0)
+
+See [`analysis_ml_windows/README.md`](analysis_ml_windows/README.md) for detailed usage.
 
 ### Utility Tools
 
@@ -46,7 +62,7 @@ See [`tools/README.md`](tools/README.md) for information about all utility tools
    python fetch.py 20251224
    ```
 
-2. **Run Analysis**:
+2. **Run Basic Analysis** (Interest-Based Windows):
    ```bash
    cd ../../analysis_simple
    pip install -r requirements.txt
@@ -54,12 +70,29 @@ See [`tools/README.md`](tools/README.md) for information about all utility tools
    ```
 
    This generates:
-   - **Masks** (sky_mask.png, persistent_edges.png, combined_mask.png)
+   - **Masks** (masks/sky_mask.png, persistent_edges.png, combined_mask.png)
    - **Metrics & Events** (data/metrics.csv, data/events.json, data/activity_windows.json)
    - **Activity Windows** (per-window timelapses, keograms, startrails in activity/ subfolder)
-   - **Visualizations** (plots of brightness, contrast, and streak counts)
-   - **Annotated Frames** (detected streaks overlaid on images)
-   - **Timelapse Videos** (MP4 videos in timelapse/ subfolder)
+   - **Visualizations** (plots/ - brightness, contrast, streak counts)
+   - **Annotated Frames** (annotated/ - detected streaks overlaid)
+   - **Timelapse Videos** (timelapse/ - full-night MP4 videos)
+
+3. **Optional: Run ML Activity Detection**:
+   ```bash
+   # Train classifier and detect ML windows
+   cd ../analysis_ml_activity_classifier
+   pip install -r requirements-ml.txt
+   python train.py ../data/night_2025-12-24/
+   
+   # Generate per-window artifacts for ML windows
+   cd ../analysis_ml_windows
+   python infer_windows.py ../data/night_2025-12-24/ --artifacts
+   ```
+
+   This adds:
+   - **ML Predictions** (ml/predictions.csv with raw and smoothed probabilities)
+   - **ML Windows** (data/ml_windows.json with peak-seeded detection)
+   - **ML Activity Artifacts** (activity_ml/ - per-window timelapses, keograms, startrails)
 
 ### Individual Tool Usage
 
@@ -91,28 +124,65 @@ night_2025-12-24/
 ├── data/                     # Structured data outputs
 │   ├── metrics.csv           # Per-frame metrics with focus_score and interest_score
 │   ├── events.json           # Detected transient events with streak coordinates
-│   └── activity_windows.json # Detected activity windows with ML-ready metadata
-├── activity/                 # Per-window artifacts for high-interest periods
+│   ├── activity_windows.json # Interest-based activity windows
+│   └── ml_windows.json       # ML-based activity windows (optional)
+├── activity/                 # Interest-based per-window artifacts
 │   └── window_00_0123_0145/
 │       ├── timelapse_window.mp4
 │       ├── keogram.png
 │       └── startrails.png
+├── activity_ml/              # ML-based per-window artifacts (optional)
+│   └── window_00_0157_0178/
+│       ├── timelapse_window.mp4
+│       ├── timelapse_annotated_window.mp4
+│       ├── keogram.png
+│       └── startrails.png
+├── ml/                       # ML classifier outputs (optional)
+│   ├── predictions.csv       # Per-frame probabilities (raw + smoothed)
+│   ├── predictions_smoothed.csv
+│   ├── report.json           # Training metrics
+│   └── topk_frames.json      # High-confidence frames
 ├── plots/                    # Time-series visualizations
+│   ├── brightness_over_time.png
+│   ├── contrast_over_time.png
+│   └── streak_counts.png
 ├── annotated/                # Frames with detected streaks overlaid
+│   └── frame_*.jpg
 └── timelapse/                # Full-night timelapse videos
+    ├── timelapse.mp4
     └── timelapse_annotated.mp4
 ```
 
 ### Activity Detection System
 
-The pipeline automatically identifies periods of high astronomical activity using a weighted **interest scoring algorithm**:
+The pipeline offers **two complementary methods** for detecting high-interest periods:
+
+#### 1. Interest-Based Detection (analysis_simple)
+
+Weighted **interest scoring algorithm** using per-frame metrics:
 
 - **Interest Score** = 0.60×(streak_count) + 0.15×(brightness_change) + 0.15×(contrast_change) + 0.10×(focus_change)
 - Robust z-scores (MAD-based) eliminate sensitivity to outliers
 - Configurable threshold, padding, and merging parameters
 - Generates focused artifacts (timelapses, keograms, startrails) for each activity window
+- **Output**: `data/activity_windows.json`, artifacts in `activity/`
 
-This enables efficient review of long observation sessions by automatically highlighting frames with potential meteors, satellites, or other transient events.
+#### 2. ML-Based Detection (analysis_ml_activity_classifier + analysis_ml_windows)
+
+**Peak-seeded windowing** on classifier probabilities:
+
+- Trains logistic regression on pseudo-labeled frames (from interest windows)
+- Uses 8 features: z-scored metrics + temporal deltas
+- **Peak-seeded algorithm**: EMA smoothing → peak detection → adaptive boundary expansion → merging
+- Handles short events (meteors) and intermittent activity (satellites through clouds)
+- **Output**: `data/ml_windows.json`, artifacts in `activity_ml/`
+
+**Why Both?**
+- Interest-based: Fast, rule-based, requires no training
+- ML-based: Data-driven, can learn patterns, provides confidence scores
+- Use together for validation or choose one based on your workflow
+
+Both methods enable efficient review of long observation sessions by automatically highlighting frames with potential meteors, satellites, or other transient events.
 
 ### Configuration Guide
 

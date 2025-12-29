@@ -664,11 +664,52 @@ windows:
 
 ## Machine Learning Integration
 
-The structured outputs are designed for machine learning workflows, enabling automated dataset generation and training data preparation.
+The structured outputs are designed for machine learning workflows, enabling automated dataset generation and training data preparation. The repository includes two ML analysis tools that work with this pipeline's outputs.
 
-### 1. Training Data Extraction
+### ML Activity Classifier (analysis_ml_activity_classifier)
 
-Use `activity_windows.json` to automatically extract high-value frames for labeling:
+Train a logistic regression classifier to predict activity frames and detect ML-based activity windows:
+
+```bash
+# After running analysis_simple
+cd ../analysis_ml_activity_classifier
+pip install -r requirements-ml.txt
+python train.py ../data/night_2025-12-24/
+```
+
+**Process:**
+1. Loads pseudo-labels from `data/activity_windows.json` (y=1 if in window, y=0 otherwise)
+2. Trains classifier on 8 features: z-scored metrics + temporal deltas
+3. Applies **peak-seeded windowing** to detect activity periods from probabilities
+4. Outputs ML predictions and windows with filename fields for easy downstream use
+
+**Key Features:**
+- Peak-seeded algorithm handles short events (meteors) and intermittent activity
+- Configurable EMA smoothing, peak detection, and window expansion parameters
+- Generates both raw and smoothed probability predictions
+- See [analysis_ml_activity_classifier/README.md](../analysis_ml_activity_classifier/README.md) for details
+
+### ML Window Artifacts (analysis_ml_windows)
+
+Generate per-window artifacts for ML-detected windows:
+
+```bash
+cd ../analysis_ml_windows
+python infer_windows.py ../data/night_2025-12-24/ --artifacts
+```
+
+**Outputs:**
+- `data/ml_windows.json` - Detected ML activity windows
+- `activity_ml/window_XX_YYYY_ZZZZ/` - Per-window timelapses, keograms, startrails
+- Optional: `ml/predictions_smoothed.csv` with smoothed probabilities
+
+**Use Case:** Compare interest-based windows (from analysis_simple) with ML-based windows (from classifier) for validation and refinement.
+
+See [analysis_ml_windows/README.md](../analysis_ml_windows/README.md) for configuration options.
+
+### Manual Training Data Extraction
+
+Use `activity_windows.json` to automatically extract high-value frames for manual labeling:
 
 ```python
 import json
@@ -700,7 +741,7 @@ for i, window in enumerate(windows[:3]):
 - Reduces manual review time by 80-90%
 - Focuses labeling effort on frames with events
 
-### 2. Feature Engineering
+### Feature Engineering for Custom ML Models
 
 Use `metrics.csv` for ML features and filtering:
 
@@ -734,7 +775,7 @@ df['streak_rolling_max'] = df['streak_count'].rolling(window=5, center=True).max
 - `interest_score` - Pre-computed activity score (can be used as target or feature)
 - `z_streak` - Normalized streak count
 
-### 3. Balanced Dataset Generation
+### Balanced Dataset Generation for Custom ML Models
 
 Create balanced positive/negative samples using activity windows:
 
